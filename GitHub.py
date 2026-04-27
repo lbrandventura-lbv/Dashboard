@@ -9,7 +9,7 @@ import os
 # =====================================================
 
 st.set_page_config(layout="wide")
-st.title("Dashboard Energético")
+st.title("Dashboard Consumo e Produção IFSC-SJ")
 
 ARQUIVO_PARQUET = "base_energia.parquet"
 
