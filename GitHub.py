@@ -133,6 +133,10 @@ fig1 = px.line(
     ],
     height=600
 )
+fig1.update_layout(
+    xaxis_title="Data",
+    yaxis_title="Energia (kWh)"
+)
 
 st.plotly_chart(fig1, use_container_width=True)
 
@@ -151,6 +155,10 @@ fig2 = px.line(
         "Potencia_PV"
     ],
     height=600
+)
+fig2.update_layout(
+    xaxis_title="Data",
+    yaxis_title="Potência (kW)"
 )
 
 st.plotly_chart(fig2, use_container_width=True)
