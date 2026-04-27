@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import os
 
 # =====================================================
 # CONFIG
@@ -10,97 +11,88 @@ import plotly.express as px
 st.set_page_config(layout="wide")
 st.title("Dashboard Energético")
 
+ARQUIVO_PARQUET = "base_energia.parquet"
+
 # =====================================================
-# CARREGAMENTO DOS DADOS (GOOGLE SHEETS)
+# FUNÇÃO GOOGLE SHEETS
 # =====================================================
 
-@st.cache_data
-def carregar_dados():
+def carregar_google():
 
-    # URLs
     url_1 = "https://docs.google.com/spreadsheets/d/1LKTWQS7hZsKQyl2igBf5DNSft4xlnJV_I8OgCnu5o0M/export?format=csv"
     url_2 = "https://docs.google.com/spreadsheets/d/1Q5lIXLld0XTHOS8GKL2FQg3kD8GaKvHLEy8rACJ1l4w/export?format=csv"
 
-    # Leitura
-    df_Consumo = pd.read_csv(url_1, encoding='latin-1', sep=',', decimal=',', low_memory=False)
-    df_Producao = pd.read_csv(url_2, encoding='latin-1', sep=',', decimal=',', low_memory=False)
+    df_consumo = pd.read_csv(url_1, sep=",", decimal=",", encoding="latin1", low_memory=False)
+    df_producao = pd.read_csv(url_2, sep=",", decimal=",", encoding="latin1", low_memory=False)
 
-    # Datetime
-    df_Consumo.insert(
-        0,
-        'Datetime',
-        pd.to_datetime(df_Consumo['Data'] + ' ' + df_Consumo['Hora'],
-                       format='%d/%m/%Y %H:%M:%S')
+    df_consumo["Datetime"] = pd.to_datetime(df_consumo["Data"] + " " + df_consumo["Hora"], dayfirst=True)
+    df_producao["Datetime"] = pd.to_datetime(df_producao["Data"] + " " + df_producao["Hora"], dayfirst=True)
+
+    df_consumo.drop_duplicates(subset="Datetime", inplace=True)
+    df_producao.drop_duplicates(subset="Datetime", inplace=True)
+
+    df_consumo.drop(columns=["Data", "Hora", "Ref. Med."], inplace=True)
+    df_producao.drop(columns=["Data", "Hora"], inplace=True)
+
+    df_consumo.set_index("Datetime", inplace=True)
+    df_producao.set_index("Datetime", inplace=True)
+
+    # Produção
+    df_producao["Potencia_PV"] = df_producao["Potencia_PV"] / 1000
+    df_producao["Energia_PV"] = df_producao["Potencia_PV"] * (5 / 60)
+
+    df_producao = df_producao.resample("15min").agg({
+        "Potencia_PV": "mean",
+        "Energia_PV": "sum"
+    }).fillna(0)
+
+    # Consumo
+    df_consumo = df_consumo.resample("15min").mean().fillna(0)
+
+    # União
+    df = df_consumo.join(df_producao, how="outer").fillna(0)
+
+    # Cálculos
+    df["Energia Ativa"] = df["Demanda Ativa"] * 0.25
+    df["Energia Injetada"] = df["Demanda Injetada"] * 0.25
+
+    df["Consumo Instantaneo"] = np.where(
+        df["Energia_PV"] > 0,
+        df["Energia Ativa"] + (df["Energia_PV"] - df["Energia Injetada"]),
+        df["Energia Ativa"]
     )
 
-    df_Producao.insert(
-        0,
-        'Datetime',
-        pd.to_datetime(df_Producao['Data'] + ' ' + df_Producao['Hora'],
-                       format='%d/%m/%Y %H:%M:%S')
-    )
+    return df.sort_index()
 
-    # Remover duplicados
-    df_Consumo = df_Consumo.drop_duplicates(subset=['Datetime'])
-    df_Producao = df_Producao.drop_duplicates(subset=['Datetime'])
+# =====================================================
+# CARREGAMENTO
+# =====================================================
 
-    # Limpeza
-    df_Consumo = df_Consumo.drop(columns=['Data', 'Hora', 'Ref. Med.'])
-    df_Producao = df_Producao.drop(columns=['Data', 'Hora'])
+@st.cache_data(ttl=21600)
+def carregar_dados():
 
-    # Índice
-    df_Consumo.set_index('Datetime', inplace=True)
-    df_Producao.set_index('Datetime', inplace=True)
+    if os.path.exists(ARQUIVO_PARQUET):
+        df = pd.read_parquet(ARQUIVO_PARQUET)
+        df.index = pd.to_datetime(df.index)
+        return df
 
-    # =====================================================
-    # PRODUÇÃO PV
-    # =====================================================
+    df = carregar_google()
+    df.to_parquet(ARQUIVO_PARQUET, engine="pyarrow", compression="snappy")
+    return df
 
-    df_Producao['Potencia_PV'] = df_Producao['Potencia_PV'] / 1000
+# =====================================================
+# BOTÃO ATUALIZAR
+# =====================================================
 
-    indice = pd.date_range(
-        df_Producao.index.min(),
-        df_Producao.index.max(),
-        freq='5min'
-    )
+if st.sidebar.button("🔄 Atualizar Base"):
+    novo = carregar_google()
+    novo.to_parquet(ARQUIVO_PARQUET, engine="pyarrow", compression="snappy")
+    st.cache_data.clear()
+    st.success("Base atualizada.")
 
-    df_Producao = df_Producao.reindex(indice).fillna(0)
-
-    df_Producao['Energia_PV'] = df_Producao['Potencia_PV'] * (5/60)
-
-    df_Producao_15min = df_Producao.resample('15min').agg({
-        'Potencia_PV': 'mean',
-        'Energia_PV': 'sum'
-    })
-
-    # =====================================================
-    # UNIÃO
-    # =====================================================
-
-    df_total = df_Consumo.join(df_Producao_15min, how='outer')
-
-    indice_15 = pd.date_range(
-        df_total.index.min(),
-        df_total.index.max(),
-        freq='15min'
-    )
-
-    df_total = df_total.reindex(indice_15).fillna(0)
-
-    # Energia
-    df_total['Energia Ativa'] = df_total['Demanda Ativa'] * 0.25
-    df_total['Energia Injetada'] = df_total['Demanda Injetada'] * 0.25
-
-    # Consumo real
-    df_total['Consumo Instantaneo'] = np.where(
-        df_total['Energia_PV'] > 0,
-        df_total['Energia Ativa'] +
-        (df_total['Energia_PV'] - df_total['Energia Injetada']),
-        df_total['Energia Ativa']
-    )
-
-    return df_total
-
+# =====================================================
+# LOAD
+# =====================================================
 
 df = carregar_dados()
 
@@ -110,118 +102,119 @@ df = carregar_dados()
 
 st.sidebar.title("Filtros")
 
-data_inicio = st.sidebar.date_input(
-    "Data inicial",
-    df.index.min().date()
+anos = sorted(df.index.year.unique())
+ano_escolhido = st.sidebar.selectbox("Selecione o Ano", anos, index=len(anos)-1)
+
+# =====================================================
+# FILTRO ANUAL
+# =====================================================
+
+df_ano = df[df.index.year == ano_escolhido]
+
+# =====================================================
+# GRÁFICO 1 - ENERGIA (15 MIN FIXO)
+# =====================================================
+
+st.subheader(f"Energia - Ano {ano_escolhido}")
+
+fig1 = px.line(
+    df_ano.reset_index(),
+    x="Datetime",
+    y=[
+        "Energia Ativa",
+        "Consumo Instantaneo",
+        "Energia Injetada",
+        "Energia_PV"
+    ],
+    height=600
 )
-
-data_fim = st.sidebar.date_input(
-    "Data final",
-    df.index.max().date()
-)
-
-periodo_label = st.sidebar.selectbox(
-    "Periodicidade",
-    ["15 min", "30 min", "1 hora", "1 dia"]
-)
-
-mapa = {
-    "15 min": "15min",
-    "30 min": "30min",
-    "1 hora": "1h",
-    "1 dia": "1d"
-}
-
-periodo = mapa[periodo_label]
-
-tipo = st.sidebar.selectbox(
-    "Tipo de gráfico",
-    ["Linha", "Barras"]
-)
-
-# =====================================================
-# FILTRO
-# =====================================================
-
-inicio = pd.to_datetime(data_inicio)
-fim = pd.to_datetime(data_fim) + pd.Timedelta(days=1)
-
-df_filtrado = df.loc[inicio:fim]
-
-# =====================================================
-# RESAMPLE
-# =====================================================
-
-df_plot = df_filtrado.resample(periodo).agg({
-    'Energia Ativa': 'sum',
-    'Consumo Instantaneo': 'sum',
-    'Energia Injetada': 'sum',
-    'Energia_PV': 'sum',
-    'Demanda Ativa': 'mean',
-    'Demanda Injetada': 'mean',
-    'Potencia_PV': 'mean'
-}).reset_index()
-
-# =====================================================
-# GRÁFICO ENERGIA
-# =====================================================
-
-st.subheader("Energia (kWh)")
-
-if tipo == "Linha":
-    fig1 = px.line(
-        df_plot,
-        x='index',
-        y=[
-            'Energia Ativa',
-            'Consumo Instantaneo',
-            'Energia Injetada',
-            'Energia_PV'
-        ],
-        height=600
-    )
-else:
-    fig1 = px.bar(
-        df_plot,
-        x='index',
-        y=[
-            'Energia Ativa',
-            'Consumo Instantaneo',
-            'Energia Injetada',
-            'Energia_PV'
-        ],
-        height=600
-    )
 
 st.plotly_chart(fig1, use_container_width=True)
 
 # =====================================================
-# GRÁFICO POTÊNCIA
+# GRÁFICO 2 - POTÊNCIA (15 MIN FIXO)
 # =====================================================
 
-st.subheader("Potência / Demanda (kW)")
+st.subheader(f"Potência / Demanda - Ano {ano_escolhido}")
 
-if tipo == "Linha":
-    fig2 = px.line(
-        df_plot,
-        x='index',
-        y=[
-            'Demanda Ativa',
-            'Demanda Injetada',
-            'Potencia_PV'
-        ],
-        height=600
-    )
-else:
-    fig2 = px.bar(
-        df_plot,
-        x='index',
-        y=[
-            'Demanda Ativa',
-            'Demanda Injetada',
-            'Potencia_PV'
-        ],
-        height=600
-    )
+fig2 = px.line(
+    df_ano.reset_index(),
+    x="Datetime",
+    y=[
+        "Demanda Ativa",
+        "Demanda Injetada",
+        "Potencia_PV"
+    ],
+    height=600
+)
 
 st.plotly_chart(fig2, use_container_width=True)
+
+# =====================================================
+# BASE MENSAL
+# =====================================================
+
+df_mensal = df.resample("ME").agg({
+    "Potencia_PV": "mean",
+    "Demanda Ativa": "mean",
+    "Demanda Injetada": "mean",
+    "Energia_PV": "sum",
+    "Energia Ativa": "sum",
+    "Energia Injetada": "sum",
+    "Consumo Instantaneo": "sum"
+})
+
+df_mensal["Ano"] = df_mensal.index.year.astype(str)
+df_mensal["Mes"] = df_mensal.index.month
+
+meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez']
+
+# =====================================================
+# GRÁFICO 3 - GERAÇÃO MENSAL
+# =====================================================
+
+st.subheader("Geração Mensal por Ano")
+
+graf_ger = df_mensal.pivot(index="Mes", columns="Ano", values="Energia_PV")
+graf_ger = graf_ger.reindex(range(1,13))
+graf_ger.index = meses
+
+fig3 = px.bar(
+    graf_ger,
+    x=graf_ger.index,
+    y=graf_ger.columns,
+    barmode="group",
+    height=600
+)
+
+fig3.update_layout(
+    xaxis_title="Mês",
+    yaxis_title="Energia Gerada (kWh)"
+)
+
+st.plotly_chart(fig3, use_container_width=True)
+
+# =====================================================
+# GRÁFICO 4 - CONSUMO MENSAL
+# =====================================================
+
+st.subheader("Consumo Mensal por Ano")
+
+graf_cons = df_mensal.pivot(index="Mes", columns="Ano", values="Energia Ativa")
+graf_cons = graf_cons.reindex(range(1,13))
+graf_cons.index = meses
+
+fig4 = px.bar(
+    graf_cons,
+    x=graf_cons.index,
+    y=graf_cons.columns,
+    barmode="group",
+    height=600
+)
+
+fig4.update_layout(
+    xaxis_title="Mês",
+    yaxis_title="Energia Consumida (kWh)"
+)
+
+st.plotly_chart(fig4, use_container_width=True)
