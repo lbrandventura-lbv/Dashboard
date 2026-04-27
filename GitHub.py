@@ -61,6 +61,11 @@ def carregar_google():
         df["Energia Ativa"] + (df["Energia_PV"] - df["Energia Injetada"]),
         df["Energia Ativa"]
     )
+    df["Consumo Instantaneo"] = np.where(
+        df["Consumo Instantaneo"] < 0,
+        0,
+        df["Consumo Instantaneo"]
+    )
 
     return df.sort_index()
 
