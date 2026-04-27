@@ -53,18 +53,18 @@ def carregar_google():
     df = df_consumo.join(df_producao, how="outer").fillna(0)
 
     # Cálculos
-    df["Energia Ativa"] = df["Demanda Ativa"] * 0.25
-    df["Energia Injetada"] = df["Demanda Injetada"] * 0.25
+    df["Energia_Ativa_(CELESC)"] = df["Demanda Ativa"] * 0.25
+    df["Energia_Injetada_(CELESC)"] = df["Demanda Injetada"] * 0.25
 
-    df["Consumo Instantaneo"] = np.where(
+    df["Consumo_Instantaneo_(CELESC+PV)"] = np.where(
         df["Energia_PV"] > 0,
-        df["Energia Ativa"] + (df["Energia_PV"] - df["Energia Injetada"]),
-        df["Energia Ativa"]
+        df["Energia_Ativa_(CELESC)"] + (df["Energia_PV"] - df["Energia_Injetada_(CELESC)"]),
+        df["Energia_Ativa_(CELESC)"]
     )
-    df["Consumo Instantaneo"] = np.where(
-        df["Consumo Instantaneo"] < 0,
+    df["Energia_Injetada_(CELESC)"] = np.where(
+        df["Energia_Injetada_(CELESC)"] < 0,
         0,
-        df["Consumo Instantaneo"]
+        df["Energia_Injetada_(CELESC)"]
     )
 
     return df.sort_index()
@@ -126,9 +126,9 @@ fig1 = px.line(
     df_ano.reset_index(),
     x="Datetime",
     y=[
-        "Energia Ativa",
-        "Consumo Instantaneo",
-        "Energia Injetada",
+        "Energia_Ativa_(CELESC)",
+        "Consumo_Instantaneo_(CELESC+PV)",
+        "Energia_Injetada_(CELESC)",
         "Energia_PV"
     ],
     height=600
@@ -172,9 +172,9 @@ df_mensal = df.resample("ME").agg({
     "Demanda Ativa": "mean",
     "Demanda Injetada": "mean",
     "Energia_PV": "sum",
-    "Energia Ativa": "sum",
-    "Energia Injetada": "sum",
-    "Consumo Instantaneo": "sum"
+    "Energia_Ativa_(CELESC)": "sum",
+    "Energia_Injetada_(CELESC)": "sum",
+    "Consumo_Instantaneo_(CELESC+PV)": "sum"
 })
 
 df_mensal["Ano"] = df_mensal.index.year.astype(str)
@@ -213,7 +213,7 @@ st.plotly_chart(fig3, use_container_width=True)
 
 st.subheader("Consumo Mensal por Ano")
 
-graf_cons = df_mensal.pivot(index="Mes", columns="Ano", values="Energia Ativa")
+graf_cons = df_mensal.pivot(index="Mes", columns="Ano", values="Energia_Ativa_(CELESC)")
 graf_cons = graf_cons.reindex(range(1,13))
 graf_cons.index = meses
 
